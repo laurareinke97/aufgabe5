@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kamerabewegung – WebGL</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f5f2;
+      --fg: #20201e;
+      --card: #fff;
+      --border: #d5d5d0;
+      --accent: #2a6fdb;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17181a;
+        --fg: #e8e8e6;
+        --card: #222427;
+        --border: #3a3d41;
+        --accent: #6ea4ff;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+
+    main {
+      max-width: 960px;
+      margin: auto;
+      padding: 16px;
+    }
+
+    h1 { font-size: 1.5rem; margin: 0 0 8px; }
+    h2 { font-size: 1.1rem; margin: 24px 0 8px; }
+
+    canvas {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      background: #101216;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      outline: none;
+    }
+
+    canvas:focus-visible { outline: 2px solid var(--accent); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin: 10px 0;
+      padding: 10px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    button {
+      padding: 4px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--fg);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); }
+    .value { display: inline-block; min-width: 2ch; text-align: center; font-weight: 600; }
+    .muted { opacity: .75; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+    }
+
+    th, td {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+
+    kbd {
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--bg);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Kamerabewegung um eine Szene</h1>
+  <p>
+    Die Szene besteht aus einem Würfel, einem Torus, einem Bodengitter
+    und einer rekursiv erzeugten Kugel.
+  </p>
+
+  <canvas id="gl" tabindex="0" aria-label="Interaktive WebGL-Szene"></canvas>
+
+  <div class="controls">
+    <span>
+      Rekursionstiefe:
+      <button id="minus" type="button" aria-label="Rekursionstiefe verringern">−</button>
+      <span class="value" id="depth">3</span>
+      <button id="plus" type="button" aria-label="Rekursionstiefe erhöhen">+</button>
+      <small class="muted" id="triangleCount"></small>
+    </span>
+
+    <span>
+      Kugeldarstellung:
+      <label><input type="radio" name="mode" value="fill"> Füllung</label>
+      <label><input type="radio" name="mode" value="lines"> Linien</label>
+      <label><input type="radio" name="mode" value="both" checked> Beides</label>
+    </span>
+  </div>
+
+  <p id="cameraInfo" class="muted" aria-live="polite"></p>
+
+  <h2>Bedienung</h2>
+  <table>
+    <tr><th>Taste</th><th>Funktion</th></tr>
+    <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Kamera auf einer Kreisbahn um die Szene bewegen</td></tr>
+    <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Kamerahöhe erhöhen / verringern</td></tr>
+    <tr><td><kbd>N</kbd> / <kbd>Shift</kbd> + <kbd>N</kbd></td><td>Radius vergrößern / verkleinern</td></tr>
+    <tr><td><kbd>+</kbd> / <kbd>−</kbd></td><td>Rekursionstiefe verändern</td></tr>
+    <tr><td>Maus</td><td>Vor der Tastatursteuerung in die Szene klicken</td></tr>
+  </table>
+  <p class="muted">
+    Die Kamerasteuerung funktioniert, wenn die Zeichenfläche den Fokus hat.
+    Die Rekursionstiefe kann auch über die Buttons verändert werden.
+  </p>
+
+  <h2>Umsetzung</h2>
+  <ul>
+    <li>
+      Die Kameraposition lautet
+      <code>Eye = (r · sin(φ), h, r · cos(φ))</code>.
+      Der Blickpunkt ist der Ursprung, der Up-Vektor ist <code>(0, 1, 0)</code>.
+      Die View-Matrix wird mit einer <code>lookAt</code>-Funktion berechnet.
+    </li>
+    <li>
+      Die Kugel beginnt mit einem Oktaeder. Jedes Dreieck wird rekursiv in
+      vier Dreiecke geteilt. Die Kantenmittelpunkte werden auf die Einheitskugel
+      normalisiert. Die Dreieckszahl beträgt <code>8 · 4^d</code>.
+    </li>
+    <li>
+      Der Würfel besteht aus sechs Flächen. Der Torus wird als parametrisierte
+      Fläche mit zwei Parametern erzeugt.
+    </li>
+  </ul>
+
+  <h2>Quellen</h2>
+  <ul>
+    <li>
+      Andreas Kahler:
+      <a href="http://blog.andreaskahler.com/2009/06/creating-icosphere-mesh-in-code.html">
+        Creating an icosphere mesh in code
+      </a>
+    </li>
+    <li>
+      Paul Bourke:
+      <a href="http://paulbourke.net/geometry/circlesphere/csource3.c">
+        Sphere subdivision
+      </a>
+    </li>
+    <li>Material der Lerneinheiten GRU und KAP (Grundlagen WebGL und lookAt).</li>
+  </ul>
+  <p class="muted">
+    Der Code wurde für diese Aufgabe selbst erstellt und angepasst.
+  </p>
+</main>
+
+<script>
+  "use strict";
+
+  const canvas = document.getElementById("gl");
+  const gl = canvas.getContext("webgl");
+
+  if (!gl) {
+    document.getElementById("cameraInfo").textContent =
+            "WebGL wird von diesem Browser nicht unterstützt.";
+  } else {
+    // ---------- Vektor- und Matrixfunktionen ----------
+
+    const subtract = (a, b) => a.map((v, i) => v - b[i]);
+    const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+
+    function cross(a, b) {
+      return [
+        a[1]*b[2] - a[2]*b[1],
+        a[2]*b[0] - a[0]*b[2],
+        a[0]*b[1] - a[1]*b[0]
+      ];
+    }
+
+    function normalize(v) {
+      const length = Math.hypot(...v) || 1;
+      return v.map(value => value / length);
+    }
+
+    const Matrix = {
+      perspective(fov, aspect, near, far) {
+        const f = 1 / Math.tan(fov / 2);
+        const m = new Float32Array(16);
+        m[0] = f / aspect;
+        m[5] = f;
+        m[10] = (far + near) / (near - far);
+        m[11] = -1;
+        m[14] = (2 * far * near) / (near - far);
+        return m;
+      },
+
+      lookAt(eye, target, up) {
+        const z = normalize(subtract(eye, target));
+        const x = normalize(cross(up, z));
+        const y = cross(z, x);
+
+        return new Float32Array([
+          x[0], y[0], z[0], 0,
+          x[1], y[1], z[1], 0,
+          x[2], y[2], z[2], 0,
+          -dot(x, eye), -dot(y, eye), -dot(z, eye), 1
+        ]);
+      },
+
+      model(position, scale) {
+        return new Float32Array([
+          scale, 0, 0, 0,
+          0, scale, 0, 0,
+          0, 0, scale, 0,
+          position[0], position[1], position[2], 1
+        ]);
+      }
+    };
+
+    // ---------- Shader ----------
+
+    const vertexShaderSource = `
+    attribute vec3 aPosition;
+    attribute vec3 aNormal;
+    attribute vec3 aColor;
+    uniform mat4 uModel;
+    uniform mat4 uView;
+    uniform mat4 uProjection;
+    varying vec3 vNormal;
+    varying vec3 vColor;
+
+    void main() {
+      vNormal = mat3(uModel) * aNormal;
+      vColor = aColor;
+      gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
+    }
+  `;
+
+    const fragmentShaderSource = `
+    precision mediump float;
+    varying vec3 vNormal;
+    varying vec3 vColor;
+    uniform float uUnlit;
+    uniform vec3 uColor;
+
+    void main() {
+      if (uUnlit > 1.5) {
+        gl_FragColor = vec4(uColor, 1.0);
+      } else if (uUnlit > 0.5) {
+        gl_FragColor = vec4(vColor, 1.0);
+      } else {
+        vec3 light = normalize(vec3(0.5, 1.0, 0.7));
+        float diffuse = max(dot(normalize(vNormal), light), 0.0);
+        gl_FragColor = vec4(vColor * (0.35 + 0.75 * diffuse), 1.0);
+      }
+    }
+  `;
+
+    function createShader(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const message = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error("Shader konnte nicht kompiliert werden: " + message);
+      }
+
+      return shader;
+    }
+
+    function createProgram() {
+      const program = gl.createProgram();
+      gl.attachShader(program, createShader(gl.VERTEX_SHADER, vertexShaderSource));
+      gl.attachShader(program, createShader(gl.FRAGMENT_SHADER, fragmentShaderSource));
+      gl.linkProgram(program);
+
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error("Shader-Programm konnte nicht verknüpft werden: " +
+                gl.getProgramInfoLog(program));
+      }
+
+      return program;
+    }
+
+    let program;
+
+    try {
+      program = createProgram();
+    } catch (error) {
+      console.error(error);
+      document.getElementById("cameraInfo").textContent =
+              "Beim Initialisieren von WebGL ist ein Fehler aufgetreten. Details stehen in der Konsole.";
+    }
+
+    if (program) {
+      gl.useProgram(program);
+
+      const locations = {
+        position: gl.getAttribLocation(program, "aPosition"),
+        normal: gl.getAttribLocation(program, "aNormal"),
+        color: gl.getAttribLocation(program, "aColor"),
+        model: gl.getUniformLocation(program, "uModel"),
+        view: gl.getUniformLocation(program, "uView"),
+        projection: gl.getUniformLocation(program, "uProjection"),
+        unlit: gl.getUniformLocation(program, "uUnlit"),
+        colorUniform: gl.getUniformLocation(program, "uColor")
+      };
+
+      // Jeder Vertex speichert Position, Normale und Farbe (je 3 Werte).
+      function createMesh(vertices) {
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        return { buffer, vertexCount: vertices.length / 9 };
+      }
+
+      function bindMesh(mesh) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buffer);
+
+        const attributes = [
+          [locations.position, 0],
+          [locations.normal, 3],
+          [locations.color, 6]
+        ];
+
+        for (const [location, offset] of attributes) {
+          gl.enableVertexAttribArray(location);
+          gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 36, offset * 4);
+        }
+      }
+
+      const vertex = (position, normal, color) =>
+              [...position, ...normal, ...color];
+
+      function colorFor(index) {
+        const hue = index * 6;
+        const channel = offset => {
+          const k = (offset + hue) % 6;
+          return 0.5 + 0.4 * Math.max(-1, Math.min(k - 3, 1, 3 - k));
+        };
+        return [channel(5), channel(3), channel(1)];
+      }
+
+      // ---------- Grundkörper ----------
+
+      function createCube(size) {
+        const data = [];
+        const faces = [
+          [1,0,0], [-1,0,0], [0,1,0],
+          [0,-1,0], [0,0,1], [0,0,-1]
+        ];
+        const corners = [[-1,-1], [1,-1], [1,1], [-1,1]];
+
+        faces.forEach((normal, index) => {
+          const u = [normal[1], normal[2], normal[0]];
+          const v = cross(normal, u);
+          const color = colorFor(index / 6);
+
+          const points = corners.map(([a, b]) =>
+                  normal.map((value, i) => (value + a*u[i] + b*v[i]) * size)
+          );
+
+          [0, 1, 2, 0, 2, 3].forEach(i => {
+            data.push(...vertex(points[i], normal, color));
+          });
+        });
+
+        return createMesh(data);
+      }
+
+      function createTorus(majorRadius, minorRadius, segmentsU, segmentsV) {
+        const data = [];
+
+        function point(i, j) {
+          const u = (i / segmentsU) * 2 * Math.PI;
+          const v = (j / segmentsV) * 2 * Math.PI;
+
+          const normal = [
+            Math.cos(v) * Math.cos(u),
+            Math.sin(v),
+            Math.cos(v) * Math.sin(u)
+          ];
+
+          const position = [
+            (majorRadius + minorRadius * Math.cos(v)) * Math.cos(u),
+            minorRadius * Math.sin(v),
+            (majorRadius + minorRadius * Math.cos(v)) * Math.sin(u)
+          ];
+
+          return vertex(position, normal, colorFor(i / segmentsU));
+        }
+
+        for (let i = 0; i < segmentsU; i++) {
+          for (let j = 0; j < segmentsV; j++) {
+            const a = point(i, j);
+            const b = point(i + 1, j);
+            const c = point(i + 1, j + 1);
+            const d = point(i, j + 1);
+            data.push(...a, ...b, ...c, ...a, ...c, ...d);
+          }
+        }
+
+        return createMesh(data);
+      }
+
+      function createGrid(size, spacing) {
+        const data = [];
+        const normal = [0, 1, 0];
+        const color = [0.5, 0.5, 0.5];
+
+        for (let i = -size; i <= size; i++) {
+          data.push(
+                  ...vertex([i*spacing, 0, -size*spacing], normal, color),
+                  ...vertex([i*spacing, 0, size*spacing], normal, color),
+                  ...vertex([-size*spacing, 0, i*spacing], normal, color),
+                  ...vertex([size*spacing, 0, i*spacing], normal, color)
+          );
+        }
+
+        return createMesh(data);
+      }
+
+      // ---------- Rekursive Kugel aus einem Oktaeder ----------
+
+      function createSphere(depth) {
+        const triangles = [];
+        const lines = [];
+
+        const points = [
+          [1,0,0], [-1,0,0], [0,1,0],
+          [0,-1,0], [0,0,1], [0,0,-1]
+        ];
+
+        const faces = [
+          [2,4,0], [2,1,4], [2,5,1], [2,0,5],
+          [3,0,4], [3,4,1], [3,1,5], [3,5,0]
+        ];
+
+        function sphereVertex(point) {
+          const color = point.map(value => 0.5 + 0.5 * value);
+          return vertex(point, point, color);
+        }
+
+        function midpoint(a, b) {
+          return normalize([
+            (a[0] + b[0]) / 2,
+            (a[1] + b[1]) / 2,
+            (a[2] + b[2]) / 2
+          ]);
+        }
+
+        function subdivide(a, b, c, remainingDepth) {
+          if (remainingDepth === 0) {
+            triangles.push(
+                    ...sphereVertex(a), ...sphereVertex(b), ...sphereVertex(c)
+            );
+
+            lines.push(
+                    ...sphereVertex(a), ...sphereVertex(b),
+                    ...sphereVertex(b), ...sphereVertex(c),
+                    ...sphereVertex(c), ...sphereVertex(a)
+            );
+            return;
+          }
+
+          const ab = midpoint(a, b);
+          const bc = midpoint(b, c);
+          const ca = midpoint(c, a);
+
+          subdivide(a, ab, ca, remainingDepth - 1);
+          subdivide(ab, b, bc, remainingDepth - 1);
+          subdivide(ca, bc, c, remainingDepth - 1);
+          subdivide(ab, bc, ca, remainingDepth - 1);
+        }
+
+        for (const face of faces) {
+          subdivide(
+                  points[face[0]],
+                  points[face[1]],
+                  points[face[2]],
+                  depth
+          );
+        }
+
+        return {
+          triangles: createMesh(triangles),
+          lines: createMesh(lines)
+        };
+      }
+
+      // ---------- Szene und Einstellungen ----------
+
+      const cube = createCube(0.8);
+      const torus = createTorus(1.2, 0.45, 40, 20);
+      const grid = createGrid(10, 1);
+
+      let depth = 3;
+      let sphere = createSphere(depth);
+      let displayMode = "both";
+
+      const camera = { angle: 0.6, radius: 9, height: 4 };
+      const pressedKeys = new Set();
+
+      const depthLabel = document.getElementById("depth");
+      const triangleLabel = document.getElementById("triangleCount");
+
+      function updateDepth(newDepth) {
+        const nextDepth = Math.max(0, Math.min(6, newDepth));
+        if (nextDepth === depth) return;
+
+        gl.deleteBuffer(sphere.triangles.buffer);
+        gl.deleteBuffer(sphere.lines.buffer);
+
+        depth = nextDepth;
+        sphere = createSphere(depth);
+        updateDepthLabels();
+      }
+
+      function updateDepthLabels() {
+        depthLabel.textContent = depth;
+        triangleLabel.textContent = `(${8 * 4 ** depth} Dreiecke)`;
+      }
+
+      updateDepthLabels();
+
+      document.getElementById("plus").addEventListener("click", () => {
+        updateDepth(depth + 1);
+      });
+
+      document.getElementById("minus").addEventListener("click", () => {
+        updateDepth(depth - 1);
+      });
+
+      document.querySelectorAll('input[name="mode"]').forEach(radio => {
+        radio.addEventListener("change", () => {
+          if (radio.checked) displayMode = radio.value;
+        });
+      });
+
+      // Die Szene erhält den Tastaturfokus erst nach einem Klick.
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      canvas.addEventListener("keydown", event => {
+        if (event.key.startsWith("Arrow")) {
+          event.preventDefault();
+          pressedKeys.add(event.key);
+          return;
+        }
+
+        if (event.key.toLowerCase() === "n") {
+          event.preventDefault();
+          camera.radius = Math.max(
+                  3,
+                  Math.min(25, camera.radius + (event.shiftKey ? -0.5 : 0.5))
+          );
+        } else if (event.key === "+" || event.key === "=") {
+          event.preventDefault();
+          updateDepth(depth + 1);
+        } else if (event.key === "-") {
+          event.preventDefault();
+          updateDepth(depth - 1);
+        }
+      });
+
+      canvas.addEventListener("keyup", event => {
+        pressedKeys.delete(event.key);
+      });
+
+      canvas.addEventListener("blur", () => {
+        pressedKeys.clear();
+      });
+
+      // ---------- Zeichnen ----------
+
+      function draw(mesh, position, scale, mode, unlit, color) {
+        bindMesh(mesh);
+        gl.uniformMatrix4fv(locations.model, false, Matrix.model(position, scale));
+        gl.uniform1f(locations.unlit, unlit);
+
+        if (color) {
+          gl.uniform3fv(locations.colorUniform, color);
+        }
+
+        gl.drawArrays(mode, 0, mesh.vertexCount);
+      }
+
+      gl.enable(gl.DEPTH_TEST);
+
+      let previousTime = 0;
+
+      function render(time) {
+        const deltaTime = Math.min((time - previousTime) / 1000, 0.05);
+        previousTime = time;
+
+        if (pressedKeys.has("ArrowLeft")) camera.angle -= 1.5 * deltaTime;
+        if (pressedKeys.has("ArrowRight")) camera.angle += 1.5 * deltaTime;
+        if (pressedKeys.has("ArrowUp")) camera.height = Math.min(10, camera.height + 4 * deltaTime);
+        if (pressedKeys.has("ArrowDown")) camera.height = Math.max(-3, camera.height - 4 * deltaTime);
+
+        // Canvas-Auflösung an Größe und Bildschirmauflösung anpassen.
+        const pixelRatio = window.devicePixelRatio || 1;
+        const width = Math.round(canvas.clientWidth * pixelRatio);
+        const height = Math.round(canvas.clientHeight * pixelRatio);
+
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.06, 0.07, 0.09, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        const eye = [
+          camera.radius * Math.sin(camera.angle),
+          camera.height,
+          camera.radius * Math.cos(camera.angle)
+        ];
+
+        gl.uniformMatrix4fv(
+                locations.view, false,
+                Matrix.lookAt(eye, [0, 0, 0], [0, 1, 0])
+        );
+
+        gl.uniformMatrix4fv(
+                locations.projection, false,
+                Matrix.perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100)
+        );
+
+        draw(grid, [0, -1.5, 0], 1, gl.LINES, 1);
+        draw(cube, [3.5, -0.7, 0], 1, gl.TRIANGLES, 0);
+        draw(torus, [-3.5, -1, 0], 1, gl.TRIANGLES, 0);
+
+        if (displayMode !== "lines") {
+          gl.enable(gl.POLYGON_OFFSET_FILL);
+          gl.polygonOffset(1, 1);
+          draw(sphere.triangles, [0, 0, 0], 1.3, gl.TRIANGLES, 0);
+          gl.disable(gl.POLYGON_OFFSET_FILL);
+        }
+
+        if (displayMode !== "fill") {
+          const lineColor = displayMode === "both"
+                  ? [0.05, 0.05, 0.08]
+                  : [0.9, 0.9, 0.95];
+
+          draw(sphere.lines, [0, 0, 0], 1.3, gl.LINES, 2, lineColor);
+        }
+
+        const degrees = (camera.angle * 180 / Math.PI % 360 + 360) % 360;
+        document.getElementById("cameraInfo").textContent =
+                `Winkel: ${degrees.toFixed(0)}° | Radius: ${camera.radius.toFixed(1)} | Höhe Y: ${camera.height.toFixed(1)}`;
+
+        requestAnimationFrame(render);
+      }
+
+      requestAnimationFrame(render);
+    }
+  }
+</script>
+</body>
+</html>
